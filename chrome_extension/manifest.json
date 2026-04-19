@@ -1,0 +1,20 @@
+{
+  "manifest_version": 3,
+  "name": "Vigil AI Dark Pattern Radar",
+  "version": "1.0",
+  "description": "Enterprise-grade dark pattern detection directly in your browser.",
+  "permissions": [
+    "activeTab",
+    "scripting"
+  ],
+  "host_permissions": [
+    "http://localhost:5000/*"
+  ],
+  "action": {
+    "default_popup": "popup.html",
+    "default_title": "Vigil AI — Dark Pattern Radar"
+  },
+  "content_security_policy": {
+    "extension_pages": "script-src 'self'; object-src 'self'"
+  }
+}
