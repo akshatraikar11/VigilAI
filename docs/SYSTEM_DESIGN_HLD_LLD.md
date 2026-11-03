@@ -665,3 +665,4 @@ When discussing Vigil AI in senior software engineering or AI/ML system design i
 4. **How does HADE eliminate False Positives on legitimate e-commerce sites?**
    - Legitimate sites frequently mention words like "expires", "cart", or "privacy policy". Naive regex flags these as dark patterns.
    - HADE uses an 8-step protocol where single-engine signals are dropped unless corroborated by another engine (e.g. ML urgency + DOM timer element = True Positive). Furthermore, disclosures like "interest-based advertising" are explicitly recognized by the disclosure language filter as informative rather than deceptive.
+
