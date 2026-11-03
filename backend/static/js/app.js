@@ -573,7 +573,7 @@ async function exportReport(format) {
 // ═══════════════════════════════════════════════════════════════
 async function loadHistory() {
     try {
-        const res = await fetch('/api/scan/history');
+        const res = await fetch('/api/history');
         const data = await res.json();
         renderHistory(data);
     } catch (e) {

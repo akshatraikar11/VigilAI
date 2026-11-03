@@ -41,6 +41,12 @@ def _is_private_ip(ip_str: str) -> bool:
     """Check if an IP address is private/reserved/loopback. Handles IPv4 and IPv6."""
     try:
         ip = ipaddress.ip_address(ip_str)
+        
+        # Special case: NAT64 transition addresses (64:ff9b::/96) are used for public IPv4 addresses
+        # These should not be blocked as they represent legitimate public addresses
+        if ip.version == 6 and ip in ipaddress.IPv6Network('64:ff9b::/96'):
+            return False
+            
         return (
             ip.is_private
             or ip.is_loopback

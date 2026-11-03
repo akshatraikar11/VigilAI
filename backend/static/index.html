@@ -40,7 +40,7 @@
       </a>
 
       <ul class="nav-links">
-        <li><a href="#" data-nav="history" class="nav-link">History</a></li>
+
         <li><a href="#" data-nav="about" class="nav-link">How it works</a></li>
         <li><button class="nav-cta" onclick="document.getElementById('url-input').focus();showView('hero')">Start
             scanning</button></li>
@@ -468,29 +468,6 @@
     </div>
   </section>
 
-  <!-- ===================== HISTORY ===================== -->
-  <section id="history">
-    <div class="container">
-      <div class="pg-hdr">
-        <button class="back-btn" onclick="showView('hero')"><svg width="14" height="14" viewBox="0 0 24 24" fill="none"
-            stroke="currentColor" stroke-width="2.5">
-            <path d="M19 12H5M5 12l7 7M5 12l7-7" />
-          </svg> Back</button>
-        <div>
-          <h2>Scan History</h2>
-          <p id="history-subtitle">Session scans</p>
-        </div>
-        <button class="icon-btn" onclick="loadHistory()">↻ Refresh</button>
-      </div>
-      <div class="session-stats" id="session-stats" style="display:none">
-        <div class="ss-tile"><strong class="ss-n" id="ss-total">0</strong><span class="ss-l">Total scans</span></div>
-        <div class="ss-tile"><strong class="ss-n" id="ss-avg">—</strong><span class="ss-l">Avg trust score</span></div>
-        <div class="ss-tile ss-warn"><strong class="ss-n" id="ss-high">0</strong><span class="ss-l">High-risk
-            sites</span></div>
-      </div>
-      <div class="history-grid" id="history-grid"></div>
-    </div>
-  </section>
 
   <!-- ===================== ABOUT ===================== -->
   <section id="about">
@@ -601,7 +578,7 @@
         <p>AI-powered dark pattern intelligence. Built for transparency.</p>
       </div>
       <nav class="footer-nav">
-        <a href="#" data-nav="history">History</a>
+
         <a href="#" data-nav="about">About</a>
       </nav>
     </div>

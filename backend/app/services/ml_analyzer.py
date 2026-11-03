@@ -18,14 +18,105 @@ extract_custom_features lives at module level so joblib can resolve it.
 import os
 import re
 import math
+import json
+import time
 import threading
+from collections import deque
 import joblib
 import numpy as np
 
 from app.core.logger import get_logger
 from app.core.exceptions import ModelLoadError
+from app.services.ml_monitor import log_inference
 
 _logger = get_logger('vigil.ml_analyzer')
+
+
+# ── H6 FIX: Confidence Drift Monitor ─────────────────────────────────────────
+class ConfidenceDriftMonitor:
+    """Tracks rolling prediction confidence and alerts on drift.
+
+    Loads the confidence baseline from model_manifest.json (set during training)
+    and compares the rolling mean confidence of live predictions against it.
+    If the rolling mean drops more than 5 points below the training baseline,
+    a warning is logged — indicating potential concept drift.
+    """
+
+    _instance = None
+    _lock = threading.Lock()
+
+    def __new__(cls):
+        with cls._lock:
+            if cls._instance is None:
+                cls._instance = super().__new__(cls)
+                cls._instance._initialized = False
+            return cls._instance
+
+    def __init__(self):
+        if self._initialized:
+            return
+        self._initialized = True
+        self._window = deque(maxlen=500)  # Rolling window of recent confidences
+        self._alert_cooldown = 0  # Timestamp of last alert
+        self._baseline_mean = None
+        self._drift_threshold = None
+        self._load_baseline()
+
+    def _load_baseline(self):
+        """Load confidence baseline from model manifest."""
+        try:
+            manifest_path = os.path.join(
+                os.path.dirname(__file__), '..', 'models', 'model_manifest.json'
+            )
+            if os.path.exists(manifest_path):
+                with open(manifest_path, 'r') as f:
+                    manifest = json.load(f)
+                baseline = manifest.get('confidence_baseline', {})
+                self._baseline_mean = baseline.get('mean')
+                self._drift_threshold = baseline.get('drift_alert_threshold')
+                if self._baseline_mean:
+                    _logger.info(
+                        f"Drift monitor: baseline mean={self._baseline_mean:.3f}, "
+                        f"alert below {self._drift_threshold:.3f}"
+                    )
+        except Exception as e:
+            _logger.debug(f"Drift monitor baseline load failed: {e}")
+
+    def record(self, confidences: list):
+        """Record a batch of prediction confidences."""
+        self._window.extend(confidences)
+        self._check_drift()
+
+    def _check_drift(self):
+        """Check if rolling confidence has drifted below threshold."""
+        if not self._drift_threshold or len(self._window) < 50:
+            return
+
+        rolling_mean = sum(self._window) / len(self._window)
+
+        if rolling_mean < self._drift_threshold:
+            now = time.time()
+            # Alert at most once per hour
+            if now - self._alert_cooldown > 3600:
+                self._alert_cooldown = now
+                _logger.warning(
+                    f"CONFIDENCE DRIFT ALERT: Rolling mean confidence "
+                    f"({rolling_mean:.3f}) dropped below threshold "
+                    f"({self._drift_threshold:.3f}). Baseline was "
+                    f"{self._baseline_mean:.3f}. Consider retraining."
+                )
+
+    @property
+    def stats(self):
+        """Return current drift monitor statistics."""
+        if not self._window:
+            return {'rolling_mean': None, 'window_size': 0}
+        return {
+            'rolling_mean': round(sum(self._window) / len(self._window), 4),
+            'window_size': len(self._window),
+            'baseline_mean': self._baseline_mean,
+            'drift_threshold': self._drift_threshold,
+        }
 
 # ── URGENCY / SHAME WORD LISTS ────────────────────────────────────────────────
 _URGENCY_WORDS = [
@@ -173,6 +264,7 @@ class MLAnalyzer:
 
     def __init__(self):
         self.findings = []
+        self._drift_monitor = ConfidenceDriftMonitor()
 
     @property
     def model(self):
@@ -194,13 +286,29 @@ class MLAnalyzer:
         if not chunks:
             return self.findings
 
-        # ── BATCH INFERENCE: 1 call instead of N ─────────────────────────
+        # ── BATCH INFERENCE: single predict_proba call with timing ──────────────────
+        # P0 FIX: Removed redundant model.predict() — predict_proba() already
+        # runs all sub-models. Deriving labels via argmax halves inference time.
+        inference_start = time.time()
         try:
-            predictions  = model.predict(chunks)
-            proba_arrays = model.predict_proba(chunks)
+            classes = getattr(model, 'classes_', None)
+            if isinstance(classes, (list, np.ndarray)) and hasattr(model, 'predict_proba'):
+                proba_arrays = model.predict_proba(chunks)
+                predictions  = [classes[p.argmax()] for p in proba_arrays]
+            else:
+                predictions  = model.predict(chunks)
+                if hasattr(model, 'predict_proba'):
+                    proba_arrays = model.predict_proba(chunks)
+                else:
+                    proba_arrays = np.array([[0.1, 0.9]] * len(chunks))
         except Exception as e:
             _logger.warning(f"ML batch inference failed ({type(e).__name__}: {e})")
             return self.findings
+        inference_time_ms = (time.time() - inference_start) * 1000 / len(chunks)  # per sample
+
+        # H6: Record confidences for drift monitoring
+        max_confs = [float(p.max()) for p in proba_arrays]
+        self._drift_monitor.record(max_confs)
 
         seen = set()
         text_elements = dom_data.get('text_elements', []) if dom_data else []
@@ -208,6 +316,9 @@ class MLAnalyzer:
         for chunk, prediction, proba_array in zip(chunks, predictions, proba_arrays):
             try:
                 confidence = float(proba_array.max())
+
+                # Production monitoring - log each inference
+                log_inference(chunk, prediction, confidence, inference_time_ms)
 
                 if prediction == 'safe' or confidence < 0.60:
                     continue

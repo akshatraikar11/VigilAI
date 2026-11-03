@@ -371,12 +371,31 @@ def quick_scan():
         aggregator = FindingsAggregator()
         clean = aggregator.aggregate(fused, page_text=scan_data.get('text_content', ''))
 
+        # P0 FIX: Quick scan was missing trust_score/grade/risk_level.
+        # Chrome extension reads these fields — returning 0/null breaks the UI.
+        report_gen = ReportGenerator()
+        trust_score = report_gen._calculate_trust_score(clean)
+        grade = report_gen._get_grade(trust_score)
+        risk_level = report_gen._get_risk_level(trust_score)
+
+        from collections import Counter
+        severity_counts = Counter(f.get('severity', 'LOW') for f in clean)
+
         return jsonify({
             'scan_id':       scan_data.get('scan_id'),
             'url':           url,
             'domain':        scan_data.get('domain'),
             'findings':      clean,
             'total_patterns': len(clean),
+            'trust_score':   trust_score,
+            'grade':         grade,
+            'risk_level':    risk_level,
+            'severity_breakdown': {
+                'critical': severity_counts.get('CRITICAL', 0),
+                'high':     severity_counts.get('HIGH', 0),
+                'medium':   severity_counts.get('MEDIUM', 0),
+                'low':      severity_counts.get('LOW', 0),
+            },
             'scan_type':     'quick',
             'analyzers_used': ['dom', 'cookie', 'advanced'],
             'status':        'success',
@@ -509,6 +528,47 @@ def scan_async():
         }), 503
 
 
+@scan_bp.route('/scan/extension', methods=['POST'])
+@limiter.limit("3 per minute; 30 per hour")
+def extension_scan():
+    """
+    Public async scan endpoint for Chrome extension.
+    No API key required for browser extension access.
+    
+    Uses the same full pipeline as the website for consistent results.
+    """
+    correlation_id = set_correlation_id()
+
+    if request.content_length and request.content_length > 32 * 1024:
+        return jsonify({'error': 'Request payload too large', 'status': 'error'}), 413
+
+    data = request.get_json(silent=True) or {}
+    valid, err = validate_scan_request(data)
+    if not valid:
+        return jsonify({'error': err, 'status': 'error'}), 400
+
+    url = sanitize_url(data['url'])
+
+    try:
+        from app.tasks import scan_website_task
+        task_id = scan_website_task(url=url, cookies=data.get('cookies', []))
+        logger.info(f"Extension async scan queued: task_id={task_id}, url={url}")
+        return jsonify({
+            'status': 'queued',
+            'task_id': task_id,
+            'poll_url': f'/api/scan/status/{task_id}',
+            'url': url,
+        }), 202
+
+    except Exception as e:
+        logger.error(f"Failed to queue extension async scan: {e}")
+        return jsonify({
+            'error': 'Extension scan queue error.',
+            'status': 'error',
+            'fallback': 'Try refreshing the page and scanning again.',
+        }), 503
+
+
 @scan_bp.route('/scan/status/<task_id>', methods=['GET'])
 def scan_status(task_id):
     """
@@ -569,4 +629,49 @@ def scan_status(task_id):
             'error': 'Could not retrieve task status.',
             'status': 'error',
         }), 500
+
+
+@scan_bp.route('/scan/export/<scan_id>', methods=['GET'])
+def export_scan(scan_id):
+    """Export scan results in JSON or text format."""
+    if not scan_id or len(scan_id) > 64:
+        return jsonify({'error': 'Invalid scan ID.', 'status': 'error'}), 400
+    
+    format_type = request.args.get('format', 'json').lower()
+    if format_type not in ['json', 'text']:
+        return jsonify({'error': 'Format must be json or text.', 'status': 'error'}), 400
+    
+    try:
+        result = get_scan(scan_id)
+        if not result:
+            return jsonify({'error': 'Scan not found.', 'status': 'error'}), 404
+        
+        if format_type == 'json':
+            # Return JSON as downloadable file
+            response = Response(
+                json.dumps(result, indent=2, ensure_ascii=False),
+                mimetype='application/json',
+                headers={
+                    'Content-Disposition': f'attachment; filename=vigil-{result.get("domain", "scan")}-report.json'
+                }
+            )
+            return response
+        else:
+            # Generate text report
+            from app.services.report_generator import ReportGenerator
+            report_gen = ReportGenerator()
+            text_report = report_gen.generate_text_report(result)
+            
+            response = Response(
+                text_report,
+                mimetype='text/plain',
+                headers={
+                    'Content-Disposition': f'attachment; filename=vigil-{result.get("domain", "scan")}-report.txt'
+                }
+            )
+            return response
+            
+    except Exception as e:
+        logger.error(f"Export failed for scan {scan_id}: {e}")
+        return jsonify({'error': 'Export failed.', 'status': 'error'}), 500
 
