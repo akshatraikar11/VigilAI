@@ -252,6 +252,11 @@ class MLAnalyzer:
                     )
 
                 cls._model_cache = joblib.load(model_path)
+                # Ensure scikit-learn cross-version compatibility (e.g. MaxAbsScaler.clip in newer scikit-learn)
+                if hasattr(cls._model_cache, 'named_steps'):
+                    scaler = cls._model_cache.named_steps.get('scaler')
+                    if scaler and not hasattr(scaler, 'clip'):
+                        scaler.clip = False
             except Exception as e:
                 _logger.error(f"ML Model load error: {e}")
             cls._model_loaded = True
